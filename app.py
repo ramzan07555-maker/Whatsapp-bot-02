@@ -23,6 +23,7 @@ def home():
 def webhook():
     try:
         data = request.json
+        print("Received Data:", data)  # Render Logs වල දත්ත බලාගැනීමට
         
         # Green API එකෙන් එන මැසේජ් එක පරීක්ෂා කිරීම
         if data.get("typeWebhook") == "incomingMessageReceived":
@@ -36,15 +37,11 @@ def webhook():
             elif message_data.get("typeMessage") == "extendedTextMessage":
                 message_text = message_data.get("extendedTextMessageData", {}).get("text", "")
 
-            # අංකය පරීක්ෂා කිරීම (අංකය අඩංගුදැයි බැලීම)
-            user_phone = "966572686730"
-            
-            if user_phone in sender and message_text:
-                
+            # අංක බැලීමකින් තොරව මැසේජ් එකක් ආපු ගමන් රිප්ලයි යැවීම
+            if sender and message_text:
                 ai_reply = "සමාවෙන්න, මට දැන් AI එකට සම්බන්ධ වෙන්න බැහැ."
                 if GEMINI_API_KEY:
                     try:
-                        # Gemini AI එකට මැසේජ් එක යවා පිළිතුර ලබා ගැනීම
                         response = model.generate_content(message_text)
                         ai_reply = response.text
                     except Exception as e:
@@ -57,7 +54,8 @@ def webhook():
                     "message": ai_reply
                 }
                 headers = {'Content-Type': 'application/json'}
-                requests.post(url, json=payload, headers=headers)
+                response = requests.post(url, json=payload, headers=headers)
+                print("Green API Response:", response.text)
 
         return "OK", 200
     except Exception as e:
