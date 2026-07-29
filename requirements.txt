@@ -1,3 +1,4 @@
-flask
-whatsapp-api-client-python
+Flask
+requests
+google-generativeai
 gunicorn
