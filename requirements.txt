@@ -1,0 +1,3 @@
+flask
+whatsapp-api-client-python
+gunicorn
