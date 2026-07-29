@@ -16,7 +16,7 @@ GREEN_API_ID_INSTANCE = os.environ.get("GREEN_API_ID_INSTANCE", "7105...")
 GREEN_API_TOKEN = os.environ.get("GREEN_API_TOKEN", "...") 
 
 # Whitelisted Number එක
-ALLOWED_NUMBER = os.environ.get("ALLOWED_NUMBER", "966572686730")
+ALLOWED_NUMBER = os.environ.get("ALLOWED_NUMBER", "+966572686730")
 
 @app.route("/", methods=["GET"])
 def home():
