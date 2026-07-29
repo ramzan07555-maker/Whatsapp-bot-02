@@ -1,3 +1,41 @@
+import os
+from flask import Flask, request
+import google.generativeai as genai
+import requests
+
+app = Flask(__name__)
+
+# Gemini API සකස් කරගැනීම
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+
+# Green API විස්තර
+GREEN_API_ID_INSTANCE = os.environ.get("GREEN_API_ID_INSTANCE")
+GREEN_API_TOKEN = os.environ.get("GREEN_API_TOKEN")
+
+@app.route("/", methods=["GET", "HEAD"])
+def home():
+    return "WhatsApp AI Bot is Running 24/7!"
+
+@app.route("/", methods=["POST"])
+def webhook():
+    try:
+        data = request.json
+        
+        # Green API එකෙන් එන මැසේජ් එක පරීක්ෂා කිරීම
+        if data.get("typeWebhook") == "incomingMessageReceived":
+            sender = data.get("senderData", {}).get("chatId", "")
+            message_data = data.get("messageData", {})
+            
+            # ටෙක්ස්ට් මැසේජ් එකක් පමණක් ලබා ගැනීම
+            message_text = ""
+            if message_data.get("typeMessage") == "textMessage":
+                message_text = message_data.get("textMessageData", {}).get("textMessage", "")
+            elif message_data.get("typeMessage") == "extendedTextMessage":
+                message_text = message_data.get("extendedTextMessageData", {}).get("text", "")
+
             # අංකය පරීක්ෂා කිරීම (අංකය අඩංගුදැයි බැලීම)
             user_phone = "966572686730"
             
@@ -20,3 +58,11 @@
                 }
                 headers = {'Content-Type': 'application/json'}
                 requests.post(url, json=payload, headers=headers)
+
+        return "OK", 200
+    except Exception as e:
+        print(f"Error: {e}")
+        return "OK", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
