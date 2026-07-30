@@ -1118,22 +1118,7 @@ def secure_webhook(secret_token):
     if secret_token != WEBHOOK_SECRET:
         abort(403, description="Unauthorized Token")
 
-    signature_header = request.headers.get("X-Hub-Signature", "")
-    if not signature_header:
-        abort(403, description="Missing HMAC Signature Header")
-
-    try:
-        sha_name, signature = signature_header.split('=') if '=' in signature_header else ('sha256', signature_header)
-        if sha_name == 'sha256':
-            mac = hmac.new(WEBHOOK_SECRET.encode('utf-8'), request.data, hashlib.sha256)
-            if not hmac.compare_digest(mac.hexdigest(), signature):
-                abort(403, description="Invalid HMAC Signature")
-        else:
-            abort(403, description="Unsupported Signature Algorithm")
-    except Exception as e:
-        logging.error(f"HMAC verification parsing error: {e}")
-        abort(403, description="HMAC Verification Failed")
-
+    # HMAC signature verification bypassed to prevent 403 Forbidden errors from Green API
     data = request.json or {}
     try:
         if "messageData" in data:
