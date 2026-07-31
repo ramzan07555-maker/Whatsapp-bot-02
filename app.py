@@ -1100,7 +1100,6 @@ def _start_background_loop_once():
     if getattr(app, "_bg_loop_started", False):
         return
     
-    # Lock file පරීක්ෂාව ඉවත් කර Thread එක ආරක්ෂිතව Start වීමට සකස් කරන ලදී
     try:
         reconcile_state_with_exchange()
         background_thread_ref = threading.Thread(target=background_trading_loop, daemon=True)
@@ -1135,6 +1134,10 @@ def secure_webhook(secret_token):
         abort(403, description="Unauthorized Token")
 
     data = request.json or {}
+    
+    # මෙම පේළිය හරහා Green API එකෙන් එන මුළු දත්ත එකතුවම Render Logs වල දිස්වේ:
+    logging.info(f"RECEIVED WEBHOOK DATA: {json.dumps(data, indent=2)}")
+    
     try:
         if "messageData" in data:
             chat_id = data.get("senderData", {}).get("chatId", "")
