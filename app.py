@@ -393,7 +393,7 @@ def check_market_liquidity_and_spread():
         logging.error(f"Market liquidity check error: {e}")
         return False
 
-# --- 6. API REQUESTS ---
+# --- API REQUESTS ---
 def api_request_with_retry(method, url, headers=None, data=None, max_retries=4):
     backoff_factor = 2
     for attempt in range(max_retries):
@@ -529,7 +529,45 @@ def get_order_by_client_oid(client_oid):
         logging.error(f"Failed to get order by client OID {client_oid}: {e}")
     return None
 
-# --- 7. ORDER EXECUTION ---
+# --- STATE RECONCILIATION LOGIC ---
+def reconcile_state_with_exchange():
+    try:
+        _, btc_bal = get_balances()
+        if btc_bal is None:
+            return
+
+        state = get_state()
+        in_pos = state.get("in_position", False)
+        dust_threshold = 0.00001
+
+        if btc_bal > dust_threshold and not in_pos:
+            price = get_price() or 0.0
+            state["in_position"] = True
+            state["position_size"] = btc_bal
+            state["initial_position_size"] = btc_bal
+            if state.get("entry_price", 0.0) == 0.0:
+                state["entry_price"] = price
+            if state.get("highest_price_since_entry", 0.0) == 0.0:
+                state["highest_price_since_entry"] = price
+            save_state(state)
+            send_whatsapp_message(f"🔄 **State Reconciled**: Detected {btc_bal} BTC on exchange. Bot state updated to IN POSITION.")
+
+        elif btc_bal <= dust_threshold and in_pos:
+            state["in_position"] = False
+            state["entry_price"] = 0.0
+            state["position_size"] = 0.0
+            state["initial_position_size"] = 0.0
+            state["dynamic_sl"] = 0.0
+            state["dynamic_tp"] = 0.0
+            state["tp1_hit"] = False
+            state["highest_price_since_entry"] = 0.0
+            state["break_even_activated"] = False
+            save_state(state)
+            send_whatsapp_message("🔄 **State Reconciled**: 0 BTC found on exchange. Bot state updated to OUT OF POSITION.")
+    except Exception as e:
+        logging.error(f"Error during state reconciliation: {e}")
+
+# --- ORDER EXECUTION ---
 def place_market_buy_with_slippage_check(amount_usdt, expected_price):
     for attempt in range(3):
         client_oid = f"buy_{int(time.time() * 1000)}_{attempt}"
@@ -620,7 +658,7 @@ def place_market_sell_with_slippage_check(size, expected_price):
         time.sleep(2.0)
     return None, 0.0, 0.0, False
 
-# --- 8. TECHNICAL INDICATORS ---
+# --- TECHNICAL INDICATORS ---
 def calculate_ema(data, period):
     if not data:
         return 0.0
@@ -796,7 +834,7 @@ def generate_signal():
 
     return "HOLD", {"reason": "No condition met", "atr": atr}, latest_candle_time
 
-# --- 9. METRICS ---
+# --- METRICS ---
 def calculate_trading_metrics():
     try:
         if not os.path.isfile(CSV_JOURNAL_FILE):
@@ -871,9 +909,10 @@ def calculate_trading_metrics():
     except Exception as e:
         return f"Metrics calculation error: {e}"
 
-# --- 10. MAIN TRADING CYCLE ---
+# --- 6. MAIN TRADING CYCLE ---
 def run_cycle(notify_whatsapp=True):
     with trading_lock:
+        reconcile_state_with_exchange()
         state = get_state()
 
         if is_news_time_restricted():
@@ -1058,10 +1097,14 @@ def background_trading_loop():
 
 def _start_background_loop_once():
     global background_thread_ref
-
     lock_file = os.path.join(DATA_DIR, "bot_background.lock")
     try:
-        if os.path.exists(lock_file):
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            file_descriptor = os.open(lock_file, flags)
+            with os.fdopen(file_descriptor, 'w') as f:
+                f.write(str(os.getpid()))
+        except FileExistsError:
             with open(lock_file, "r") as f:
                 pid_str = f.read().strip()
                 if pid_str.isdigit():
@@ -1079,9 +1122,8 @@ def _start_background_loop_once():
                             os.kill(pid, 0)
                             return
                         except OSError:
-                            pass
-        with open(lock_file, "w") as f:
-            f.write(str(os.getpid()))
+                            with open(lock_file, "w") as f:
+                                f.write(str(os.getpid()))
     except Exception:
         pass
 
@@ -1090,6 +1132,8 @@ def _start_background_loop_once():
         not app.debug) or "gunicorn" in sys.argv[0]:
         if getattr(app, "_bg_loop_started", False):
             return
+        
+        reconcile_state_with_exchange()
         background_thread_ref = threading.Thread(target=background_trading_loop, daemon=True)
         background_thread_ref.start()
         app._bg_loop_started = True
@@ -1112,13 +1156,12 @@ def shutdown_link_actions(signum=None, frame=None):
 signal.signal(signal.SIGTERM, shutdown_link_actions)
 signal.signal(signal.SIGINT, shutdown_link_actions)
 
-# --- 11. SECURE WEBHOOK (Trading + AI Chat) ---
+# --- 7. SECURE WEBHOOK (Green API Compatible & AI Chat) ---
 @app.route('/webhook/<path:secret_token>', methods=['POST'])
 def secure_webhook(secret_token):
-    if secret_token != WEBHOOK_SECRET:
+    if not hmac.compare_digest(secret_token, WEBHOOK_SECRET):
         abort(403, description="Unauthorized Token")
 
-    # HMAC signature verification bypassed to prevent 403 Forbidden errors from Green API
     data = request.json or {}
     try:
         if "messageData" in data:
