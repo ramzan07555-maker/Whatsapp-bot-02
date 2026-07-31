@@ -1097,46 +1097,18 @@ def background_trading_loop():
 
 def _start_background_loop_once():
     global background_thread_ref
-    lock_file = os.path.join(DATA_DIR, "bot_background.lock")
+    if getattr(app, "_bg_loop_started", False):
+        return
+    
+    # Lock file පරීක්ෂාව ඉවත් කර Thread එක ආරක්ෂිතව Start වීමට සකස් කරන ලදී
     try:
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        try:
-            file_descriptor = os.open(lock_file, flags)
-            with os.fdopen(file_descriptor, 'w') as f:
-                f.write(str(os.getpid()))
-        except FileExistsError:
-            with open(lock_file, "r") as f:
-                pid_str = f.read().strip()
-                if pid_str.isdigit():
-                    pid = int(pid_str)
-                    if sys.platform == "win32":
-                        import ctypes
-                        SYNCHRONIZE = 0x00100000
-                        PROCESS_QUERY_INFORMATION = 0x0400
-                        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, False, pid)
-                        if handle != 0:
-                            ctypes.windll.kernel32.CloseHandle(handle)
-                            return
-                    else:
-                        try:
-                            os.kill(pid, 0)
-                            return
-                        except OSError:
-                            with open(lock_file, "w") as f:
-                                f.write(str(os.getpid()))
-    except Exception:
-        pass
-
-    if (os.environ.get("WERKZEUG_RUN_MAIN") == "true" or
-        os.environ.get("FLASK_RUN_FROM_CLI") == "true" or
-        not app.debug) or "gunicorn" in sys.argv[0]:
-        if getattr(app, "_bg_loop_started", False):
-            return
-        
         reconcile_state_with_exchange()
         background_thread_ref = threading.Thread(target=background_trading_loop, daemon=True)
         background_thread_ref.start()
         app._bg_loop_started = True
+        logging.info("Background trading loop started successfully.")
+    except Exception as e:
+        logging.error(f"Failed to start background loop: {e}")
 
 _start_background_loop_once()
 
