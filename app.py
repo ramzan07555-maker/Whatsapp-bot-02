@@ -481,4 +481,62 @@ def _is_duplicate(message_id):
         _recent_message_ids.append(message_id)
         if len(_recent_message_ids) > _MAX_RECENT_IDS:
             del _recent_message_ids[0]
-        return
+        return False
+
+
+@app.route('/webhook/<path:secret_token>', methods=['POST'])
+def webhook(secret_token):
+    if not hmac.compare_digest(secret_token, WEBHOOK_SECRET):
+        abort(403)
+
+    data = request.json or {}
+
+    # Green API sends webhooks for several event types — incoming messages,
+    # but also delivery/status updates about messages WE sent (outgoingMessageStatus,
+    # outgoingAPIMessageReceived, etc). Without this check, the bot's own replies
+    # could get echoed back and processed as if they were new incoming messages,
+    # causing a self-triggering reply loop. Only react to genuine incoming messages.
+    if data.get("typeWebhook") != "incomingMessageReceived":
+        return "OK", 200
+
+    message_id = data.get("idMessage") or data.get("messageData", {}).get("idMessage")
+    if _is_duplicate(message_id):
+        return "OK", 200
+
+    try:
+        msg_data = data.get("messageData", {})
+        if msg_data.get("typeMessage") == "textMessage":
+            text = msg_data.get("textMessageData", {}).get("textMessage", "")
+            chat_id = data.get("senderData", {}).get("chatId", "")
+            logging.info(f"Webhook diag: received chat_id={chat_id!r} expected={MY_PHONE_CHAT_ID!r} match={chat_id == MY_PHONE_CHAT_ID} text={text!r}")
+            if chat_id == MY_PHONE_CHAT_ID:
+                # Process synchronously (not in a background thread). On Render's
+                # free tier, the process can idle/suspend right after this request
+                # returns — a background thread doing KuCoin + WhatsApp calls could
+                # get cut off mid-flight before the reply is ever sent. Blocking
+                # here until handle_command finishes guarantees the reply goes out
+                # before the response completes, at the cost of a slower webhook ack.
+                handle_command(text, chat_id)
+            else:
+                logging.warning(f"Webhook: chat_id mismatch, message ignored. Full payload: {json.dumps(data)[:500]}")
+    except Exception:
+        logging.exception("Webhook processing error")
+
+    return "OK", 200
+
+
+# --- SHUTDOWN ---
+def shutdown_handler(signum=None, frame=None):
+    shutdown_flag.set()
+    global background_thread_ref
+    if background_thread_ref and background_thread_ref.is_alive():
+        background_thread_ref.join(timeout=5.0)
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, shutdown_handler)
+signal.signal(signal.SIGINT, shutdown_handler)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
