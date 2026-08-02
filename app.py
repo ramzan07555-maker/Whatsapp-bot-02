@@ -467,4 +467,91 @@ def _handle_command_inner(text, chat_id):
         else:
             msg = (f"📊 Status\nIn position: NO\nLast buy amount: {state.get('last_buy_amount', 0):.2f}\n"
                    f"Total realized: {state.get('total_realized_profit_usdt', 0):+.4f} USDT\n"
-                   f"USDT: {usdt:.2f} 
+                   f"USDT: {usdt:.2f} | BTC: {btc:.8f}\nSend 'buy <amount>' to open a position.")
+        send_whatsapp(msg, chat_id)
+
+    else:
+        reply = get_ai_reply(text)
+        send_whatsapp(reply, chat_id)
+
+
+# --- WEBHOOK (with duplicate-delivery protection) ---
+_recent_message_ids = []
+_recent_ids_lock = threading.Lock()
+_MAX_RECENT_IDS = 200
+
+
+def _is_duplicate(message_id):
+    if not message_id:
+        return False
+    with _recent_ids_lock:
+        if message_id in _recent_message_ids:
+            return True
+        _recent_message_ids.append(message_id)
+        if len(_recent_message_ids) > _MAX_RECENT_IDS:
+            del _recent_message_ids[0]
+        return False
+
+
+@app.route('/webhook/<path:secret_token>', methods=['POST'])
+def webhook(secret_token):
+    if not hmac.compare_digest(secret_token, WEBHOOK_SECRET):
+        abort(403)
+
+    data = request.json or {}
+
+    # Green API sends webhooks for several event types — incoming messages,
+    # but also delivery/status updates about messages WE sent (outgoingMessageStatus,
+    # outgoingAPIMessageReceived, etc). Without this check, the bot's own replies
+    # could get echoed back and processed as if they were new incoming messages,
+    # causing a self-triggering reply loop. Only react to genuine incoming messages.
+    if data.get("typeWebhook") != "incomingMessageReceived":
+        return "OK", 200
+
+    message_id = data.get("idMessage") or data.get("messageData", {}).get("idMessage")
+    if _is_duplicate(message_id):
+        return "OK", 200
+
+    try:
+        msg_data = data.get("messageData", {})
+        if msg_data.get("typeMessage") == "textMessage":
+            text = msg_data.get("textMessageData", {}).get("textMessage", "")
+            chat_id = data.get("senderData", {}).get("chatId", "")
+            logging.info(f"Webhook diag: received chat_id={chat_id!r} expected={MY_PHONE_CHAT_ID!r} match={chat_id == MY_PHONE_CHAT_ID} text={text!r}")
+            if chat_id == MY_PHONE_CHAT_ID:
+                # Bounded wait: start the work in a thread, wait up to 35s for it
+                # to finish before returning. This gives the reply time to actually
+                # go out before the HTTP response completes (avoiding the original
+                # bug where Render's free-tier spin-down cut off a fire-and-forget
+                # background thread before send_whatsapp ran). But capping the wait
+                # at 25s — safely under gunicorn's worker timeout — means a slow
+                # KuCoin/WhatsApp call can no longer get the whole worker process
+                # killed (which is what caused the 500s and worker restarts).
+                t = threading.Thread(target=handle_command, args=(text, chat_id), daemon=True)
+                t.start()
+                t.join(timeout=35)
+                if t.is_alive():
+                    logging.warning("handle_command still running after 35s — returning response, thread continues in background.")
+            else:
+                logging.warning(f"Webhook: chat_id mismatch, message ignored. Full payload: {json.dumps(data)[:500]}")
+    except Exception:
+        logging.exception("Webhook processing error")
+
+    return "OK", 200
+
+
+# --- SHUTDOWN ---
+def shutdown_handler(signum=None, frame=None):
+    shutdown_flag.set()
+    global background_thread_ref
+    if background_thread_ref and background_thread_ref.is_alive():
+        background_thread_ref.join(timeout=5.0)
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, shutdown_handler)
+signal.signal(signal.SIGINT, shutdown_handler)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
